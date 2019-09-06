@@ -204,7 +204,7 @@ func (self *PostgresDatabase) prepareStatements() {
 		GetMessageIDByHash:              "SELECT message_id, message_newsgroup FROM Articles WHERE message_id_hash = $1 LIMIT 1",
 		CheckEncIPBanned:                "SELECT 1 FROM EncIPBans WHERE encaddr = $1",
 		GetFirstAndLastForGroup:         "WITH x(min_no, max_no) AS ( SELECT MIN(message_no) AS min_no, MAX(message_no) AS max_no FROM ArticleNumbers WHERE newsgroup = $1) SELECT CASE WHEN min_no IS NULL THEN 0 ELSE min_no END AS min_no FROM x UNION SELECT CASE WHEN max_no IS NULL THEN 1 ELSE max_no END AS max_no FROM x",
-		GetNewsgroupList:                "SELECT newsgroup, min(message_no), max(message_no) FROM ArticleNumbers GROUP BY newsgroup ORDER BY newsgroup",
+		GetNewsgroupList:                "SELECT newsgroup, min(message_no), max(message_no) FROM ArticleNumbers WHERE newsgroup NOT IN ( SELECT newsgroup FROM bannedgroups ) GROUP BY newsgroup ORDER BY newsgroup",
 		GetMessageIDForNNTPID:           "SELECT message_id FROM ArticleNumbers WHERE newsgroup = $1 AND message_no = $2 LIMIT 1",
 		GetNNTPIDForMessageID:           "SELECT message_no FROM ArticleNumbers WHERE newsgroup = $1 AND message_id = $2 LIMIT 1",
 		IsExpired:                       "WITH x(msgid) AS ( SELECT message_id FROM Articles WHERE message_id = $1 INTERSECT ( SELECT message_id FROM ArticlePosts WHERE message_id = $1 ) ) SELECT COUNT(*) FROM x",
@@ -219,10 +219,10 @@ func (self *PostgresDatabase) prepareStatements() {
 		GetMessageIDByCIDR:              "SELECT message_id FROM ArticlePosts WHERE addr IN ( SELECT encaddr FROM EncryptedAddrs WHERE addr_cidr <<= cidr($1) )",
 		GetMessageIDByEncryptedIP:       "SELECT message_id FROM ArticlePosts WHERE addr = $1",
 		GetPostsBefore:                  "SELECT message_id FROM ArticlePosts WHERE time_posted < $1",
-		SearchQuery_1:                   "SELECT newsgroup, message_id, ref_id FROM ArticlePosts WHERE message LIKE $1 ORDER BY time_posted DESC",
-		SearchQuery_2:                   "SELECT newsgroup, message_id, ref_id FROM ArticlePosts WHERE newsgroup = $1 AND message LIKE $2 ORDER BY time_posted DESC",
-		SearchByHash_1:                  "SELECT message_newsgroup, message_id, message_ref_id FROM Articles WHERE message_id_hash LIKE $1 ORDER BY time_obtained DESC",
-		SearchByHash_2:                  "SELECT message_newsgroup, message_id, message_ref_id FROM Articles WHERE message_newsgroup = $2 AND message_id_hash LIKE $1 ORDER BY time_obtained DESC",
+		SearchQuery_1:                   "SELECT newsgroup, message_id, ref_id FROM ArticlePosts WHERE message LIKE $1 ORDER BY time_posted DESC LIMIT $2",
+		SearchQuery_2:                   "SELECT newsgroup, message_id, ref_id FROM ArticlePosts WHERE newsgroup = $1 AND message LIKE $2 ORDER BY time_posted DESC LIMIT $3",
+		SearchByHash_1:                  "SELECT message_newsgroup, message_id, message_ref_id FROM Articles WHERE message_id_hash LIKE $1 ORDER BY time_obtained DESC LIMIT $2",
+		SearchByHash_2:                  "SELECT message_newsgroup, message_id, message_ref_id FROM Articles WHERE message_newsgroup = $2 AND message_id_hash LIKE $1 ORDER BY time_obtained DESC LIMIT $3",
 		GetNNTPPostsInGroup:             "SELECT message_no, ArticlePosts.message_id, subject, time_posted, ref_id, name, path FROM ArticleNumbers INNER JOIN ArticlePosts ON ArticleNumbers.message_id = ArticlePosts.message_id WHERE ArticlePosts.newsgroup = $1 ORDER BY message_no",
 		GetCitesByPostHashLike:          "SELECT message_id, message_ref_id FROM Articles WHERE message_id_hash LIKE $1",
 		GetYearlyPostHistory:            "WITH times(endtime, begintime) AS ( SELECT CAST(EXTRACT(epoch from i) AS BIGINT) AS endtime, CAST(EXTRACT(epoch from i - interval '1 month') AS BIGINT) AS begintime FROM generate_series(now() - interval '10 year', now(), '1 month'::interval) i ) SELECT begintime, endtime, ( SELECT count(*) FROM ArticlePosts WHERE time_posted > begintime AND time_posted < endtime) FROM times",
@@ -1970,14 +1970,14 @@ func (self *PostgresDatabase) GetPostingStats(gran, begin, end int64) (st Postin
 	return
 }
 
-func (self *PostgresDatabase) SearchQuery(prefix, group string, text string, chnl chan PostModel) (err error) {
+func (self *PostgresDatabase) SearchQuery(prefix, group string, text string, chnl chan PostModel, limit int) (err error) {
 	if text != "" && strings.Count(text, "%") == 0 {
 		text = "%" + text + "%"
 		var rows *sql.Rows
 		if group == "" {
-			rows, err = self.conn.Query(self.stmt[SearchQuery_1], text)
+			rows, err = self.conn.Query(self.stmt[SearchQuery_1], text, limit)
 		} else {
-			rows, err = self.conn.Query(self.stmt[SearchQuery_2], group, text)
+			rows, err = self.conn.Query(self.stmt[SearchQuery_2], group, text, limit)
 		}
 		if err == nil {
 			for rows.Next() {
@@ -1991,15 +1991,15 @@ func (self *PostgresDatabase) SearchQuery(prefix, group string, text string, chn
 	close(chnl)
 	return
 }
-func (self *PostgresDatabase) SearchByHash(prefix, group, text string, chnl chan PostModel) (err error) {
+func (self *PostgresDatabase) SearchByHash(prefix, group, text string, chnl chan PostModel, limit int) (err error) {
 	if text != "" && strings.Count(text, "%") == 0 {
 		text = "%" + text + "%"
 		var rows *sql.Rows
 		if group == "" {
-			rows, err = self.conn.Query(self.stmt[SearchByHash_1], text)
+			rows, err = self.conn.Query(self.stmt[SearchByHash_1], text, limit)
 		} else {
 
-			rows, err = self.conn.Query(self.stmt[SearchByHash_2], text, group)
+			rows, err = self.conn.Query(self.stmt[SearchByHash_2], text, group, limit)
 		}
 		if err == nil {
 			for rows.Next() {

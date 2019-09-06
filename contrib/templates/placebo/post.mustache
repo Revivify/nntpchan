@@ -30,12 +30,46 @@
     {{#post.Attachments}}
     <a href="{{Source}}" class="image_link" target="_blank" title="{{Filename}}"><img src="{{Thumbnail}}" class="image" /></a>
     {{/post.Attachments}}
-    <a href="#" onclick="nntpchan_mod_delete('{{post.PostHash}}');">[Delete]</a>
-    <a href="#" onclick="nntpchan_mod_mark_spam('{{post.PostHash}}');">[Spam]</a>
+    <span class="mod" onclick="nntpchan_mod_delete('{{post.PostHash}}');">[Delete]</span>
+    <span class="mod" onclick="nntpchan_mod_mark_spam('{{post.PostHash}}');">[Spam]</span>
+    {{#post.IsCtl}}
+    <span class="mod" onclick="nntpchan_mod_trust_mod('{{post.PubkeyHex}}', this);">[Trust Moderator]</span>
+    <span class="mod" onclick="nntpchan_mod_untrust_mod('{{post.PubkeyHex}}', this);">[UnTrust Moderator]</span>
+    <span class="mod" onclick="nntpchan_mod_decode_ipban('{{post.PostHash}}');">[Decode Secrets]</span>
+    {{/post.IsCtl}}
     <a name="{{post.PostHash}}"></a><span class="topicline"><b data-subject="{{post.Subject}}" class="subject">{{post.Subject}}</b> {{post.Name}} <span class="published">{{post.Frontend}} || {{post.Date}}</span> {{{post.Pubkey}}} <a href="{{post.PostURL}}">[Reply]</a>
     <a href="#" onclick="return quickreply('{{post.ShortHash}}', '{{post.PostHash}}', '{{post.PostURL}}');"> {{post.ShortHash}}</a>
     </span>
     <br /><br />
-    <span class="message_span">{{{post.RenderBody}}}</span>
+    <span id="post_body_{{post.PostHash}}" class="message_span">{{{post.RenderBody}}}</span>
+    {{#post.OP}}
+        <script type="text/javascript">
+         fetch("/api/find?hash={{post.PostHash}}").then(function(resp) {
+             return resp.json();
+         }).then(function(j) {
+             console.log(j);
+             if (j.length) {
+                 var e = document.getElementById("post_body_{{post.PostHash}}");
+                 if(e) {
+                     var u = new URL(j[0].ReferencedURI);
+                     console.log(u);
+                     if(u.protocol === "https:" || u.protocol === "http:") {
+                         var link = document.createElement("a");
+                         link.href = u.toString();
+                         link.innerText = "[Link]";
+                         link.setAttribute("target", "_blank");
+                         link.setAttribute("class", "post-link")
+                         e.appendChild(document.createElement("hr"));
+                         e.appendChild(link);
+                     }
+                 }
+                 else throw "wut";
+             } 
+         }).catch(function(resp) {
+             
+         });
+        </script>
+    {{/post.OP}}
     <br style="clear: both;" />
+    
 </div>

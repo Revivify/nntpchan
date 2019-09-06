@@ -324,10 +324,10 @@ func (self *httpFrontend) poll_liveui() {
 								th := threads[c-idx-1]
 								th.Update(self.daemon.database)
 								// send root post
-								go live.Inform(th.OP())
+								live.Inform(th.OP())
 								// send replies
 								for _, post := range th.Replies() {
-									go live.Inform(post)
+									live.Inform(post)
 								}
 							}
 						}
@@ -392,25 +392,32 @@ func (self *httpFrontend) HandleNewPost(nntp frontendPost) {
 	if len(ref) > 0 {
 		msgid = ref
 	}
-	go func() {
-		entry := ArticleEntry{msgid, group}
-		// regnerate thread
-		self.Regen(entry)
-		// regenerate all board pages if not archiving
-		if !self.archive {
-			self.RegenerateBoard(group)
-		}
-		// regen front page
-		self.RegenFrontPage()
-	}()
+
+	entry := ArticleEntry{msgid, group}
+	// regnerate thread
+	self.Regen(entry)
+	// regenerate all board pages if not archiving
+	if !self.archive {
+		self.RegenerateBoard(group)
+	}
+	// regen front page
+	self.RegenFrontPage()
+
 }
 
 // create a new captcha, return as json object
 func (self *httpFrontend) new_captcha_json(wr http.ResponseWriter, r *http.Request) {
+	s, err := self.store.Get(r, self.name)
+	if err != nil {
+		http.Error(wr, err.Error(), 500)
+		return
+	}
 	captcha_id := captcha.New()
 	resp := make(map[string]string)
 	// the captcha id
 	resp["id"] = captcha_id
+	s.Values["captcha_id"] = captcha_id
+	s.Save(r, wr)
 	// url of the image
 	resp["url"] = fmt.Sprintf("%scaptcha/%s.png", self.prefix, captcha_id)
 	wr.Header().Set("Content-Type", "text/json; encoding=UTF-8")
@@ -430,6 +437,7 @@ func (self *httpFrontend) handle_postform(wr http.ResponseWriter, r *http.Reques
 
 	// the post we will turn into an nntp article
 	pr := new(postRequest)
+	pr.ExtraHeaders = make(map[string]string)
 
 	if sendJson {
 		wr.Header().Add("Content-Type", "text/json; encoding=UTF-8")
@@ -513,6 +521,11 @@ func (self *httpFrontend) handle_postform(wr http.ResponseWriter, r *http.Reques
 				captcha_solution = part_buff.String()
 			} else if partname == "dubs" {
 				pr.Dubs = part_buff.String() == "on"
+			} else if partname == "uri" {
+				str := part_buff.String()
+				if len(str) > 0 {
+					pr.ExtraHeaders["X-References-Uri"] = safeHeader(str)
+				}
 			}
 
 			// we done
@@ -540,15 +553,26 @@ func (self *httpFrontend) handle_postform(wr http.ResponseWriter, r *http.Reques
 		}
 	}
 
-	sess, _ := self.store.Get(r, self.name)
+	sess, err := self.store.Get(r, self.name)
+	if err != nil {
+		errmsg := fmt.Sprintf("session store error: %s", err.Error())
+		if sendJson {
+			json.NewEncoder(wr).Encode(map[string]interface{}{"error": errmsg})
+		} else {
+			io.WriteString(wr, errmsg)
+		}
+		return
+	}
 	if checkCaptcha && len(captcha_id) == 0 {
 		cid, ok := sess.Values["captcha_id"]
 		if ok {
 			captcha_id = cid.(string)
+		} else {
+			log.Println("no captcha id in session?")
 		}
 		sess.Values["captcha_id"] = ""
 	}
-
+	log.Println("captcha", captcha_id, "try '", captcha_solution, "'")
 	if checkCaptcha && !captcha.VerifyString(captcha_id, captcha_solution) {
 		// captcha is not valid
 		captcha_retry = true
@@ -721,8 +745,7 @@ func (self *httpFrontend) handle_postRequest(pr *postRequest, b bannedFunc, e er
 		}
 	}
 
-	// always lower case newsgroups
-	board := strings.ToLower(pr.Group)
+	board := pr.Group
 
 	// post fail message
 	banned, err = self.daemon.database.NewsgroupBanned(board)
@@ -967,6 +990,7 @@ func (self *httpFrontend) serve_captcha(wr http.ResponseWriter, r *http.Request)
 	if err == nil {
 		captcha_id := captcha.New()
 		s.Values["captcha_id"] = captcha_id
+		log.Println("captcha_id", captcha_id)
 		s.Save(r, wr)
 		redirect_url := fmt.Sprintf("%scaptcha/%s.png", self.prefix, captcha_id)
 		// redirect to the image
@@ -1046,27 +1070,30 @@ func (self httpFrontend) handle_authed_api(wr http.ResponseWriter, r *http.Reque
 func (self *httpFrontend) handle_api_find(wr http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	h := q.Get("hash")
+	msgid := q.Get("id")
 	if len(h) > 0 {
-		msgid := q.Get("id")
-		if len(h) > 0 {
-			e, err := self.daemon.database.GetMessageIDByHash(h)
-			if err == nil {
-				msgid = e.MessageID()
-			}
+		e, err := self.daemon.database.GetMessageIDByHash(h)
+		if err == nil {
+			msgid = e.MessageID()
 		}
-		if len(msgid) > 0 {
-			// found it (probaly)
-			model := self.daemon.database.GetPostModel(self.prefix, msgid)
-			if model == nil {
-				// no model
+	}
+
+	if !ValidMessageID(msgid) {
+		msgid = ""
+	}
+
+	if len(msgid) > 0 {
+		self.daemon.store.GetMessage(msgid, func(nntp NNTPMessage) {
+			if nntp == nil {
 				wr.WriteHeader(404)
-			} else {
-				// we found it
-				wr.Header().Add("Content-Type", "text/json; encoding=UTF-8")
-				json.NewEncoder(wr).Encode([]PostModel{model})
+				return
 			}
-			return
-		}
+			model := PostModelFromMessage(self.prefix, nntp)
+			// we found it
+			wr.Header().Add("Content-Type", "text/json; encoding=UTF-8")
+			json.NewEncoder(wr).Encode([]PostModel{model})
+		})
+		return
 	}
 	s := q.Get("text")
 	g := q.Get("group")
@@ -1093,13 +1120,14 @@ func (self *httpFrontend) handle_api_find(wr http.ResponseWriter, r *http.Reques
 		}
 		donechnl <- 0
 	}(wr)
+	limit := 50
 	if len(h) > 0 {
-		self.daemon.database.SearchByHash(self.prefix, g, h, chnl)
+		go self.daemon.database.SearchByHash(self.prefix, g, h, chnl, limit)
 	} else {
-		self.daemon.database.SearchQuery(self.prefix, g, s, chnl)
+		go self.daemon.database.SearchQuery(self.prefix, g, s, chnl, limit)
 	}
+	chnl <- nil
 	<-donechnl
-	close(donechnl)
 	io.WriteString(wr, " null ]")
 	return
 }
@@ -1535,15 +1563,15 @@ func NewHTTPFrontend(daemon *NNTPDaemon, cache CacheInterface, config map[string
 	front.store = sessions.NewCookieStore([]byte(front.secret))
 	front.store.Options = &sessions.Options{
 		// TODO: detect http:// etc in prefix
-		Path:   front.prefix,
+		Path:   "/",
 		MaxAge: 600,
 	}
 
 	// liveui related members
 	front.liveui_chnl = make(chan PostModel, 128)
-	front.liveui_register = make(chan *liveChan)
-	front.liveui_deregister = make(chan *liveChan)
-	front.liveui_chans = make(map[string]*liveChan)
+	front.liveui_register = make(chan *liveChan, 128)
+	front.liveui_deregister = make(chan *liveChan, 128)
+	front.liveui_chans = make(map[string]*liveChan, 128)
 	front.end_liveui = make(chan bool)
 	return front
 }

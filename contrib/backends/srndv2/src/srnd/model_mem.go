@@ -295,6 +295,11 @@ type post struct {
 	Type              string
 	nntp_id           int
 	FrontendPublicKey string
+	ReferencedURI     string
+}
+
+func (p *post) IsCtl() bool {
+	return p.board == "ctl"
 }
 
 func (self *post) NNTPID() int {
@@ -407,7 +412,7 @@ func (self *attachment) Filename() string {
 	return self.Name
 }
 
-func PostModelFromMessage(parent, prefix string, nntp NNTPMessage) PostModel {
+func PostModelFromMessage(prefix string, nntp NNTPMessage) PostModel {
 	p := new(post)
 	p.PostName = nntp.Name()
 	p.PostSubject = nntp.Subject()
@@ -418,10 +423,11 @@ func PostModelFromMessage(parent, prefix string, nntp NNTPMessage) PostModel {
 	p.Posted = nntp.Posted()
 	p.op = nntp.OP()
 	p.prefix = prefix
-	p.Parent = parent
+	p.Parent = nntp.Reference()
 	p.addr = nntp.Addr()
 	p.sage = nntp.Sage()
 	p.Key = nntp.Pubkey()
+	p.ReferencedURI = nntp.Headers().Get("X-References-Uri", "")
 	p.FrontendPublicKey = nntp.FrontendPubkey()
 	for _, att := range nntp.Attachments() {
 		p.Files = append(p.Files, att.ToModel(prefix))
@@ -623,6 +629,7 @@ func (self *post) Truncate() PostModel {
 		// TODO: copy?
 		Files:             self.Files,
 		FrontendPublicKey: self.FrontendPublicKey,
+		ReferencedURI:     self.ReferencedURI,
 	}
 }
 

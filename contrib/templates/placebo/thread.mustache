@@ -23,7 +23,7 @@
         <script type="text/javascript" src="{{thread.Prefix}}static/overchan.js"></script>
         <meta property="og:site_name" content="changolia" />
         <meta property="og:type" content="website"/>
-        <meta property="og:title" content="{{board.Board}}"/>
+        <meta property="og:title" content="{{thread.Board}}"/>
         <meta property="og:description" content="{{thread.OP.Brief}}"/>
         {{#sfw}}
         <meta property="og:url" content="{{prefix}}t/{{thread.OP.PostHash}}/?lang={{i18n.Name}}&sfw=1"/>
@@ -57,10 +57,10 @@
             {{^thread.BumpLock}}
             <div class="thread" id="thread_{{thread.OP.PostHash}}">
             {{/thread.BumpLock}}
-                {{{thread.OP.RenderPost}}}
-                {{#thread.Replies}}
-                    {{{RenderPost}}}
-                {{/thread.Replies}}
+            {{{thread.OP.RenderPost}}}
+            {{#thread.Replies}}
+                {{{RenderPost}}}
+            {{/thread.Replies}}
             </div>
             <hr style="clear: both;">
         <footer>
